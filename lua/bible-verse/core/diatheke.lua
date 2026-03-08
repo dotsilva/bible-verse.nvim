@@ -31,6 +31,12 @@ end
 function M.call(translation, format, locale, query)
   local command = string.format("diatheke -b %s -f %s -l %s -k %s", translation, format, locale, query)
   local command_output = vim.fn.system(command)
+
+  -- Strip all XML/HTML tags (like <w> and <l>)
+  -- This ensures the parser only sees pure text.
+  -- This ensure text formatted as poetic in ASV is parsed and appear
+  command_output = command_output:gsub("<[^>]+>", "")
+
   if vim.v.shell_error ~= 0 then
     error("diatheke command return error|command=" .. command)
   end
