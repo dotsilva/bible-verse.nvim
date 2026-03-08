@@ -1,48 +1,78 @@
 local M = {}
 
 --- Parse raw diatheke output to the expected format.
+--- Converts multi-line, tagged SWORD module output into a clean Lua table.
 ---@param output string raw diatheke output
 ---@return Verse[] verses
 local function parse_raw_output(output)
   local verses = {}
 
-  -- 1. Strip XML/HTML tags
+  -- 1. SANITIZATION
+  -- Strip all OSIS XML/HTML tags (e.g., <w>, <l>, <lg>).
+  -- This is required for critical text modules like ASV, LEB, and SBLGNT
+  -- which embed Strong's numbers and poetry markers directly in the text.
   output = output:gsub("<[^>]+>", "")
 
-  -- 2. State machine to accumulate multi-line verses
+  -- 2. STATE MACHINE INITIALIZATION
+  -- We use a state machine instead of a single regex because diatheke
+  -- often uses hard line breaks mid-sentence for poetic stanzas.
   local current_verse = nil
 
+  -- Iterate through the sanitized output line-by-line
   for line in output:gmatch("[^\r\n]+") do
-    line = vim.trim(line)
+    -- Trim trailing spaces, but preserve leading spaces for paragraph detection
+    -- We will trim the final strings before insertion.
+    local trimmed_line = vim.trim(line)
 
-    -- Skip empty lines and the translation footer (e.g., "(ASV)")
-    if line ~= "" and not line:match("^%([%w]+%)$") then
-      -- Look for a new verse header: "Book Name 1:2: Text"
-      local book, chap, vnum, text = line:match("^(.-)%s+(%d+):(%d+):%s*(.*)")
+    -- Skip empty lines and translation footers (e.g., "(ASV)", "(KJV)")
+    if trimmed_line ~= "" and not trimmed_line:match("^%([%w]+%)$") then
+      -- Look for a standard verse header.
+      -- Capture Groups:
+      -- 1. ^(.-)   : Book name (lazy match to support numbered books like '1 John')
+      -- 2. (%d+)   : Chapter number
+      -- 3. (%d+)   : Verse number
+      -- 4. (%s*)   : Whitespace immediately following the colon (crucial for paragraph detection)
+      -- 5. (.*)    : The actual verse text on this line
+      local book, chap, vnum, space, text = line:match("^(.-)%s+(%d+):(%d+):(%s*)(.*)")
 
       if book and chap and vnum then
-        -- Save the previous verse before starting a new one
+        -- A new verse header was found.
+        -- Push the previously accumulated verse into the results table.
         if current_verse then
           table.insert(verses, current_verse)
         end
+
+        -- PARAGRAPH DETECTION (Backward Compatibility)
+        -- Diatheke signals a paragraph break either by outputting the text
+        -- on a completely new line (text == ""), or by injecting multiple
+        -- spaces after the colon (space:len() > 1).
+        local is_paragraph_break = string.len(space) > 1 or text == ""
 
         -- Start accumulating the new verse
         current_verse = {
           book = vim.trim(book),
           chapter = chap,
           verse_number = vnum,
-          verse_prefix_newline = false,
+          verse_prefix_newline = is_paragraph_break,
           verse = vim.trim(text),
           verse_suffix_newline = false,
         }
       elseif current_verse then
-        -- If no header is found, this line belongs to the current verse. Append it.
-        current_verse.verse = current_verse.verse .. " " .. line
+        -- No header found. This line is a continuation of the current verse
+        -- due to a hard line break in the SWORD module.
+
+        -- Append the text. If the buffer is currently empty (due to a paragraph break),
+        -- assign it directly to prevent injecting an unwanted leading space.
+        if current_verse.verse == "" then
+          current_verse.verse = trimmed_line
+        else
+          current_verse.verse = current_verse.verse .. " " .. trimmed_line
+        end
       end
     end
   end
 
-  -- Push the final accumulated verse into the table
+  -- Loop finished. Push the final accumulated verse into the table.
   if current_verse then
     table.insert(verses, current_verse)
   end
