@@ -6,28 +6,45 @@ local M = {}
 local function parse_raw_output(output)
   local verses = {}
 
-  -- 1. Strip all XML/HTML tags (Strongs, Poetry, etc.)
+  -- 1. Strip XML/HTML tags
   output = output:gsub("<[^>]+>", "")
 
-  -- 2. Line-by-line parsing to handle broken formatting
-  for line in output:gmatch("[^\r\n]+") do
-    -- ^(.-)   : Captures the Book (including numbers like '1 John')
-    -- %s+     : Space between Book and Chapter
-    -- (%d+)   : Chapter number
-    -- :(%d+): : Verse number wrapped in colons
-    -- %s*(.*) : The actual verse text
-    local book, chap, vnum, v = line:match("^(.-)%s+(%d+):(%d+):%s*(.*)")
+  -- 2. State machine to accumulate multi-line verses
+  local current_verse = nil
 
-    if book and chap and vnum and v then
-      table.insert(verses, {
-        book = vim.trim(book),
-        chapter = chap,
-        verse_number = vnum,
-        verse_prefix_newline = false,
-        verse = vim.trim(v),
-        verse_suffix_newline = false,
-      })
+  for line in output:gmatch("[^\r\n]+") do
+    line = vim.trim(line)
+
+    -- Skip empty lines and the translation footer (e.g., "(ASV)")
+    if line ~= "" and not line:match("^%([%w]+%)$") then
+      -- Look for a new verse header: "Book Name 1:2: Text"
+      local book, chap, vnum, text = line:match("^(.-)%s+(%d+):(%d+):%s*(.*)")
+
+      if book and chap and vnum then
+        -- Save the previous verse before starting a new one
+        if current_verse then
+          table.insert(verses, current_verse)
+        end
+
+        -- Start accumulating the new verse
+        current_verse = {
+          book = vim.trim(book),
+          chapter = chap,
+          verse_number = vnum,
+          verse_prefix_newline = false,
+          verse = vim.trim(text),
+          verse_suffix_newline = false,
+        }
+      elseif current_verse then
+        -- If no header is found, this line belongs to the current verse. Append it.
+        current_verse.verse = current_verse.verse .. " " .. line
+      end
     end
+  end
+
+  -- Push the final accumulated verse into the table
+  if current_verse then
+    table.insert(verses, current_verse)
   end
 
   return verses
