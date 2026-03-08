@@ -6,18 +6,29 @@ local M = {}
 local function parse_raw_output(output)
   local verses = {}
 
-  _ = output:gsub("([%w ]+) ([%d]+):([%d]+):([%s]+)([^\r\n]+)[\r\n]", function(book, chap, vnum, prefix, v)
+  -- 1. Strip all XML/HTML tags (Strongs, Poetry, etc.)
+  output = output:gsub("<[^>]+>", "")
+
+  -- 2. Line-by-line parsing to handle broken formatting
+  for line in output:gmatch("[^\r\n]+") do
+    -- ^(.-)   : Captures the Book (including numbers like '1 John')
+    -- %s+     : Space between Book and Chapter
+    -- (%d+)   : Chapter number
+    -- :(%d+): : Verse number wrapped in colons
+    -- %s*(.*) : The actual verse text
+    local book, chap, vnum, v = line:match("^(.-)%s+(%d+):(%d+):%s*(.*)")
+
     if book and chap and vnum and v then
       table.insert(verses, {
-        book = book,
+        book = vim.trim(book),
         chapter = chap,
         verse_number = vnum,
-        verse_prefix_newline = prefix and prefix:find("[\r\n]") ~= nil,
-        verse = v,
+        verse_prefix_newline = false,
+        verse = vim.trim(v),
         verse_suffix_newline = false,
       })
     end
-  end)
+  end
 
   return verses
 end
@@ -32,14 +43,10 @@ function M.call(translation, format, locale, query)
   local command = string.format("diatheke -b %s -f %s -l %s -k %s", translation, format, locale, query)
   local command_output = vim.fn.system(command)
 
-  -- Strip all XML/HTML tags (like <w> and <l>)
-  -- This ensures the parser only sees pure text.
-  -- This ensure text formatted as poetic in ASV is parsed and appear
-  command_output = command_output:gsub("<[^>]+>", "")
-
   if vim.v.shell_error ~= 0 then
     error("diatheke command return error|command=" .. command)
   end
+
   return parse_raw_output(command_output)
 end
 
